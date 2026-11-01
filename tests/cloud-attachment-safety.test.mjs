@@ -186,6 +186,22 @@ test('recreated local attachments leave cloud-only state and short links resolve
   await f.safety.localPresent(f.filePath); assert.equal(f.safety.protects(f.filePath), false);
 });
 
+test('a timestamp-only update during verification still cleans identical bytes', async () => {
+  const f = await fixture(); await f.stage();
+  f.state.beforeRemote = () => { f.file.stat.mtime = 999; };
+  assert.equal(await f.ack(), true);
+  assert.equal(f.local.has(f.filePath), false);
+});
+test('a timestamp update cannot hide changed local bytes', async () => {
+  const f = await fixture(); await f.stage();
+  f.state.beforeRemote = () => {
+    f.file.stat.mtime = 999;
+    new Uint8Array(f.local.get(f.filePath).content)[0] ^= 1;
+  };
+  assert.equal(await f.ack(), false);
+  assert.equal(f.trashed.length, 0);
+  assert.equal(f.safety.protects(f.filePath), false);
+});
 test('server deduplication confirmation can clean unchanged bytes after its timestamp update', async () => {
   const f = await fixture(); await f.stage(); f.file.stat.mtime = 999;
   assert.equal(await f.safety.afterServerFileExists(f.filePath, f.hash), true);
