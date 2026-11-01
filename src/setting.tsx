@@ -2,7 +2,7 @@ import { App, PluginSettingTab, Setting, Platform, SearchComponent, MarkdownRend
 import { createRoot, Root } from "react-dom/client";
 import { unzipSync } from "fflate";
 
-import { parseRules, SyncRule, getPluginDir, debounce, showSyncNotice, dump, dumpError } from "./lib/utils/helpers";
+import { parseRules, SyncRule, getPluginDir, debounce, showSyncNotice, dump, dumpError, unsyncedPluginIds, LOCKED_UNSYNCED_PLUGIN_IDS } from "./lib/utils/helpers";
 import { resetSettingSyncTime, rebuildAllHashes, clearAllHashes } from "./lib/sync/operator";
 import { SettingsView } from "./views/settings-view";
 import { RuleEditorModal } from "./views/rule-editor-modal";
@@ -14,6 +14,8 @@ import { AppWithInternal } from "./lib/utils/types";
 import { RuleEditor } from "./views/rule-editor";
 import { $ } from "./i18n/lang";
 import FastSync from "./main";
+import { bindTabHeaderDrag, revealSelectedTab } from "./lib/settings/tab_navigation";
+import { RUNTIME_VERSION, RUNTIME_BUILD_ID } from "./lib/utils/build_info";
 import { updateVaultName } from "./lib/settings/vault_name";
 import { CLOUD_MEDIA_EXTENSIONS, MAX_CLOUD_ONLY_MB, CloudMediaType } from "./lib/storage/cloud_attachment_policy";
 
@@ -71,6 +73,8 @@ export interface PluginSettings {
   showVersionInfo: boolean
   /** 配置同步 - 增加目录同步（多行） */
   configSyncOtherDirs: string
+  /** 配置同步中整份留在本机的插件 ID。BRAT 另有硬性排除，不依赖这份名单。 */
+  configSyncExcludedPluginIds: string[]
   /** 网络请求库类型 */
   networkLibrary: "fetch" | "requestUrl"
   /** 最小化自动暂停同步 */
@@ -133,7 +137,7 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   // 是否自动上传
   syncEnabled: true,
   configSyncEnabled: false,
-  logEnabled: "off",
+  logEnabled: "internal",
   // API 网关地址
   api: "",
   // API 令牌
@@ -160,6 +164,7 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   debugRemoteUrls: "",
   showVersionInfo: false,
   configSyncOtherDirs: "",
+  configSyncExcludedPluginIds: ["obsidian42-brat"],
   networkLibrary: "requestUrl",
   autoPauseMinimized: false,
   sharedPaths: [],
@@ -217,6 +222,9 @@ export class SettingTab extends PluginSettingTab {
   // 缓存结构，避免频繁重绘导致卡顿
   private contentEl: HTMLElement | null = null
   private searchComponent: SearchComponent | null = null
+  private headerDragCleanup: (() => void) | null = null
+  private headerDragTarget: HTMLElement | null = null
+  private forceRebuild = false
   private lastViewMode: string = "" // 用于记录上次渲染的模式 (TabId 或 "SEARCH")
 
   private component: Component = new Component()
@@ -231,17 +239,24 @@ export class SettingTab extends PluginSettingTab {
   }
 
   hide(): void {
+    this.headerDragCleanup?.()
+    this.headerDragCleanup = null
+    this.headerDragTarget = null
+    this.lastViewMode = ""
     this.roots.forEach((root) => root.unmount())
     this.roots = []
     this.component.unload()
   }
 
   refresh(): void {
-    (this as unknown as { display(): void }).display();
+    this.forceRebuild = true;
+    (this as unknown as { display(): void }).display()
   }
 
   display(): void {
     this.component.load()
+    const force = this.forceRebuild
+    this.forceRebuild = false
     const { containerEl: set } = this
 
     // 记录当前的滚动位置 / Record current scroll position
@@ -255,6 +270,7 @@ export class SettingTab extends PluginSettingTab {
     if (!headerEl || !hasSearch || !this.contentEl) {
       set.empty()
       this.unmountRoots()
+      set.createDiv("fns-setting-build-info").setText($("setting.runtime_version") + RUNTIME_VERSION + " · " + RUNTIME_BUILD_ID)
       this.renderSearch(set)
       this.renderHeader(set)
       this.contentEl = set.createDiv("fns-setting-tab-content")
@@ -266,36 +282,24 @@ export class SettingTab extends PluginSettingTab {
 
     const contentEl = this.contentEl
 
-    // 2. 移动端滑动监听 (如果 contentEl 是新建的，需要重新挂载)
-    if (Platform.isMobile && !contentEl.hasAttribute("data-swipe-init")) {
-      contentEl.setAttribute("data-swipe-init", "true")
-      let touchStartX = 0
-      let touchStartY = 0
-      contentEl.addEventListener(
-        "touchstart",
-        (e) => {
-          touchStartX = e.changedTouches[0].screenX
-          touchStartY = e.changedTouches[0].screenY
-        },
-        { passive: true },
-      )
-
-      contentEl.addEventListener(
-        "touchend",
-        (e) => {
-          const touchEndX = e.changedTouches[0].screenX
-          const touchEndY = e.changedTouches[0].screenY
-          this.handleSwipe(touchStartX, touchStartY, touchEndX, touchEndY)
-        },
-        { passive: true },
-      )
+    const currentHeader = set.querySelector(".fns-setting-tab-header") as HTMLElement
+    if (this.headerDragTarget !== currentHeader) {
+      this.headerDragCleanup?.()
+      this.headerDragTarget = currentHeader
+      this.headerDragCleanup = bindTabHeaderDrag(currentHeader, left => { this.headerScrollLeft = left })
     }
 
     // 3. 根据搜索状态或标签页渲染内容
     const currentMode = this.searchQuery ? "SEARCH" : this.activeTab
 
-    // 关键修正：每次 display 时都清空并重新渲染，除非是在极高频的搜索过滤中
-    // 之前因为判断 lastViewMode 导致重新打开窗口时内容为空
+    // Configuration sync can call display repeatedly. Keep the current page and
+    // focused remote inputs mounted unless the user explicitly changes the view.
+    if (!force && currentMode === this.lastViewMode && contentEl.childElementCount > 0) {
+      dump("[Settings] Kept mounted page", currentMode)
+      return
+    }
+    dump("[Settings] Render page", currentMode, { explicitRefresh: force })
+
     contentEl.empty()
     this.unmountRoots()
 
@@ -341,16 +345,15 @@ export class SettingTab extends PluginSettingTab {
   }
 
   private updateHeaderSelection(headerEl: HTMLElement) {
+    const selection = this.searchQuery ? "" : this.activeTab
+    const changed = headerEl.dataset.selectedTabId !== selection
+    headerEl.dataset.selectedTabId = selection
     const tabs = headerEl.querySelectorAll(".fns-setting-tab-item")
-    tabs.forEach((tabEl) => {
-      const el = tabEl as HTMLElement
-      if (el.dataset.tabId === this.activeTab && !this.searchQuery) {
-        el.addClass("is-active")
-        // 确保选中的 Tab 可见
-        el.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" })
-      } else {
-        el.removeClass("is-active")
-      }
+    tabs.forEach(tab => {
+      const el = tab as HTMLElement
+      const selected = el.dataset.tabId === selection
+      el.toggleClass("is-active", selected)
+      if (selected && changed) revealSelectedTab(headerEl, el)
     })
   }
 
@@ -363,31 +366,6 @@ export class SettingTab extends PluginSettingTab {
       }
     })
     this.roots = []
-  }
-
-  private handleSwipe(startX: number, startY: number, endX: number, endY: number) {
-    const deltaX = endX - startX
-    const deltaY = endY - startY
-    const threshold = 50
-
-    if (Math.abs(deltaX) > threshold && Math.abs(deltaX) > Math.abs(deltaY) * 1.5) {
-      const tabs: TabId[] = ["GENERAL", "DISPLAY", "REMOTE", "SYNC", "SHORTCUT", "CLOUD", "DEBUG"]
-      const currentIndex = tabs.indexOf(this.activeTab)
-
-      if (deltaX > 0) {
-        // Swipe right -> Previous tab
-        if (currentIndex > 0) {
-          this.activeTab = tabs[currentIndex - 1]
-          this.refresh()
-        }
-      } else {
-        // Swipe left -> Next tab
-        if (currentIndex < tabs.length - 1) {
-          this.activeTab = tabs[currentIndex + 1]
-          this.refresh()
-        }
-      }
-    }
   }
 
   private renderSearch(containerEl: HTMLElement) {
@@ -483,7 +461,7 @@ export class SettingTab extends PluginSettingTab {
       { id: "DEBUG", label: $("setting.tab.debug") },
     ]
 
-    let activeTabEl: HTMLElement | null = null
+    headerEl.dataset.selectedTabId = this.searchQuery ? "" : this.activeTab
 
     tabs.forEach((tab) => {
       const tabEl = headerEl.createDiv("fns-setting-tab-item")
@@ -491,9 +469,9 @@ export class SettingTab extends PluginSettingTab {
       tabEl.dataset.tabId = tab.id // 设置标识用于后续更新状态
       if (this.activeTab === tab.id) {
         tabEl.addClass("is-active")
-        activeTabEl = tabEl
       }
       tabEl.onclick = () => {
+        dump("[Settings] Select tab", { previous: this.activeTab, next: tab.id })
         this.searchQuery = "" // 切换标签时清空搜索
         if (this.searchComponent) this.searchComponent.setValue("")
         this.activeTab = tab.id
@@ -502,16 +480,9 @@ export class SettingTab extends PluginSettingTab {
     })
 
     headerEl.scrollLeft = this.headerScrollLeft
-    headerEl.onscroll = () => {
-      this.headerScrollLeft = headerEl.scrollLeft
-    }
-
-    if (activeTabEl) {
-      window.requestAnimationFrame(() => {
-        if (!activeTabEl) return
-        activeTabEl.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" })
-      })
-    }
+    window.requestAnimationFrame(() => {
+      if (headerEl.isConnected) headerEl.scrollLeft = this.headerScrollLeft
+    })
   }
 
   private renderGeneralSettings(set: HTMLElement) {
@@ -1260,9 +1231,7 @@ export class SettingTab extends PluginSettingTab {
     this.roots.push(root)
     // 预设一个小文本，防止被搜索逻辑判定为“空元素”而隐藏
     apiSet.setText(" ")
-    window.setTimeout(() => {
-      root.render(<SettingsView plugin={this.plugin} />)
-    }, 50)
+    root.render(<SettingsView plugin={this.plugin} />)
 
     new Setting(set)
       .setClass("fns-setting-item-vertical")
@@ -1567,6 +1536,7 @@ export class SettingTab extends PluginSettingTab {
       }),
     )
     this.setDescWithBreaks(set.lastElementChild as HTMLElement, $("setting.sync.auto_config_desc"))
+    this.renderUnsyncedPlugins(set)
 
     new Setting(set).setName($("setting.sync.binary_limit")).setClass("fns-setting-item-checkbox").addToggle((toggle) =>
       toggle.setValue(this.plugin.settings.binarySyncLimitEnabled).onChange(async (value) => {
@@ -1819,6 +1789,51 @@ export class SettingTab extends PluginSettingTab {
           }),
       )
     this.setDescWithBreaks(set.lastElementChild as HTMLElement, $("setting.sync.merge_strategy_desc"))
+  }
+
+  private renderUnsyncedPlugins(set: HTMLElement) {
+    new Setting(set).setName($("setting.sync.exclude_plugins")).setHeading()
+    this.setDescWithBreaks(set.lastElementChild as HTMLElement, $("setting.sync.exclude_plugins_desc"))
+
+    const box = set.createDiv({ cls: "fns-plugin-exclude-list" })
+    const selfId = this.plugin.manifest.id
+    const selected = new Set(unsyncedPluginIds(this.plugin))
+    const manifests = Object.values(
+      (this.app as App & { plugins?: { manifests?: Record<string, { id: string; name?: string }> } }).plugins?.manifests ?? {},
+    )
+    const rows = new Map<string, { id: string; name: string; locked: boolean }>()
+    rows.set("obsidian42-brat", { id: "obsidian42-brat", name: "BRAT", locked: true })
+    for (const manifest of manifests) {
+      if (!manifest?.id || manifest.id === selfId || !/^[A-Za-z0-9._-]+$/.test(manifest.id)) continue
+      rows.set(manifest.id, {
+        id: manifest.id,
+        name: manifest.name || rows.get(manifest.id)?.name || manifest.id,
+        locked: (LOCKED_UNSYNCED_PLUGIN_IDS as readonly string[]).includes(manifest.id),
+      })
+    }
+    for (const id of this.plugin.settings.configSyncExcludedPluginIds ?? []) {
+      if (typeof id !== "string" || id === selfId || !/^[A-Za-z0-9._-]+$/.test(id) || rows.has(id)) continue
+      rows.set(id, { id, name: id, locked: false })
+    }
+    const ordered = [...rows.values()].sort((a, b) => Number(b.locked) - Number(a.locked) || a.name.localeCompare(b.name))
+    for (const row of ordered) {
+      new Setting(box)
+        .setName(row.name)
+        .setDesc(row.locked ? $("setting.sync.exclude_plugins_locked") : row.id)
+        .setClass("fns-setting-item-checkbox")
+        .addToggle((toggle) => {
+          toggle.setValue(row.locked || selected.has(row.id)).setDisabled(row.locked)
+          toggle.onChange(async (value) => {
+            if (row.locked) return
+            const next = new Set(unsyncedPluginIds(this.plugin))
+            if (value) next.add(row.id)
+            else next.delete(row.id)
+            for (const lockedId of LOCKED_UNSYNCED_PLUGIN_IDS) next.add(lockedId)
+            this.plugin.settings.configSyncExcludedPluginIds = [...next]
+            await this.plugin.saveAndReloadServices()
+          })
+        })
+    }
   }
 
   private renderCloudSettings(set: HTMLElement) {

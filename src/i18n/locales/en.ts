@@ -2,6 +2,7 @@
 
 
 export default {
+  "setting.runtime_version": "Running version: ",
   "config_safety.title": "Resolve configuration deletion conflicts",
   "config_safety.explanation": "These local configurations differ from the known synced version, or have no confirmed baseline. The server marked them deleted. Automatic upload and deletion are paused until you choose.",
   "config_safety.empty": "No pending configuration deletion conflicts.",
@@ -88,6 +89,9 @@ export default {
   "setting.sync.hash_limit_desc": "The maximum number of files allowed to have their hashes calculated in a single sync cycle. Files exceeding this limit will be skipped in the current sync and processed in the next sync cycle. The default value is 20000.",
   "setting.sync.auto_config": "Configuration Sync",
   "setting.sync.auto_config_desc": "Sync configurations, plugin programs, themes and styles under <b>${configDir}</b>. On first comparison, the server version wins for the same path; local-only files may upload. Live local changes wait for this comparison. Fast Note Sync connection settings and sync indexes remain device-local.",
+  "setting.sync.exclude_plugins": "Plugins kept on this device",
+  "setting.sync.exclude_plugins_desc": "Checked plugins stay on this device. Their program and settings are not uploaded, overwritten, or deleted. The sync whitelist cannot turn them back on. BRAT always stays on this device so tracked versions do not overwrite each other. This list itself is not synced.",
+  "setting.sync.exclude_plugins_locked": "Always kept on this device",
   "setting.sync.pdf_state": "PDF State Sync",
   "setting.sync.pdf_state_desc": "When enabled, the reading state of the PDF viewer will be synced. (This setting requires Config Sync to be enabled)",
   "setting.sync.merge_strategy": "Note Offline Edit Conflict Merge Strategy",

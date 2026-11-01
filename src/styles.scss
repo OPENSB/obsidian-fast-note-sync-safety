@@ -237,6 +237,13 @@
   border-top: 1px solid var(--background-modifier-border);
 }
 
+.fns-setting-build-info {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  margin-bottom: 8px;
+  user-select: text;
+}
+
 .fns-setting-search-container {
   margin-bottom: 15px;
   width: 100%;
@@ -255,6 +262,10 @@
 .fns-setting-tab-header {
   display: flex;
   overflow-x: auto;
+  max-width: 100%;
+  min-width: 0;
+  touch-action: pan-x pan-y;
+  overscroll-behavior-x: contain;
   gap: 8px;
   border-bottom: 1px solid var(--background-modifier-border);
   margin-bottom: 20px;
@@ -267,6 +278,7 @@
 }
 
 .fns-setting-tab-item {
+  flex-shrink: 0;
   padding: 8px 12px;
   cursor: pointer;
   white-space: nowrap;
@@ -288,7 +300,20 @@
 
 .fns-setting-tab-content {
   min-height: 400px; /* 确保有足够的滑动区域 */
-  touch-action: pan-y; /* 允许垂直滚动，由 JS 处理水平滑动 1 */
+  touch-action: auto; /* Content gestures never change settings pages. */
+}
+
+.fns-plugin-exclude-list {
+  max-height: 280px;
+  overflow: auto;
+  margin-bottom: 18px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+
+  .setting-item {
+    border-bottom: 1px solid var(--background-modifier-border);
+    padding: 10px 12px;
+  }
 }
 
 /* 手机端及平板端强制设置项垂直排列，但排除开关按钮（保持在右侧） */
