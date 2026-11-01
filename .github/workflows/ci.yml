@@ -1,0 +1,21 @@
+name: Verify test plugin
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.14.0
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - run: pnpm run lint
+      - run: node --test tests/config-safety.test.mjs tests/brat-update-safety.test.mjs
+      - run: pnpm run test:vault-name
+      - run: pnpm run build
+      - run: pnpm exec sass --no-source-map src/styles.scss styles.css
+      - name: Check compiled styles are committed
+        run: git diff --exit-code -- styles.css
