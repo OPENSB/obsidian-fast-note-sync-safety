@@ -1,3 +1,4 @@
+import type { TFile } from "obsidian";
 import type FastSync from "../../main";
 import { getPluginDir, hashArrayBuffer } from "../utils/helpers";
 import { isCloudOnlyEligible, normalizeCloudPath } from "./cloud_attachment_policy";
@@ -131,6 +132,12 @@ export class CloudAttachmentSafety {
         return this.afterServerFileExists(path, hash);
     }
 
+    private async localBytesMatch(snapshot: UploadSnapshot, file: TFile): Promise<boolean> {
+        if (!this.stillAllowed(snapshot) || file.path !== snapshot.path || file.stat.size !== snapshot.size) return false;
+        if (this.plugin.app.vault.getFileByPath(snapshot.path) !== file) return false;
+        return await this.sha256(await this.plugin.app.vault.readBinary(file)) === snapshot.sha256;
+    }
+
     private stillAllowed(snapshot: UploadSnapshot): boolean {
         return !this.stopped && snapshot.scope === this.scope() && snapshot.token === this.plugin.settings.apiToken
             && this.plugin.settings.syncEnabled && !this.plugin.settings.readonlySyncEnabled
@@ -154,21 +161,14 @@ export class CloudAttachmentSafety {
 
         return (await this.plugin.lockManager.withLock(snapshot.path, async () => {
             const file = this.plugin.app.vault.getFileByPath(snapshot.path);
-            if (!this.stillAllowed(snapshot) || !file || file.stat.size !== snapshot.size || file.stat.mtime !== snapshot.mtime) return false;
-            if (await this.sha256(await this.plugin.app.vault.readBinary(file)) !== snapshot.sha256) return false;
-            if (!this.stillAllowed(snapshot) || file.stat.size !== snapshot.size || file.stat.mtime !== snapshot.mtime) return false;
+            // Sync may rewrite mtime while the cloud copy is read back. Byte identity is the SHA-256.
+            if (!file || !await this.localBytesMatch(snapshot, file)) return false;
             const key = JSON.stringify([snapshot.scope, snapshot.path]);
             // Persist BEFORE the host emits delete events, including delayed callbacks.
             // The journal also protects the next full scan after a crash or restart.
             try {
                 await this.change(key, { scope: snapshot.scope, path: snapshot.path, sha256: snapshot.sha256, size: snapshot.size });
-                if (!this.stillAllowed(snapshot) || file.path !== snapshot.path
-                    || this.plugin.app.vault.getFileByPath(snapshot.path) !== file
-                    || file.stat.size !== snapshot.size || file.stat.mtime !== snapshot.mtime) return false;
-                if (await this.sha256(await this.plugin.app.vault.readBinary(file)) !== snapshot.sha256) return false;
-                if (!this.stillAllowed(snapshot) || file.path !== snapshot.path
-                    || this.plugin.app.vault.getFileByPath(snapshot.path) !== file
-                    || file.stat.size !== snapshot.size || file.stat.mtime !== snapshot.mtime) return false;
+                if (!await this.localBytesMatch(snapshot, file)) return false;
                 await this.plugin.app.fileManager.trashFile(file);
                 this.plugin.fileHashManager.removeFileHash(snapshot.path);
                 this.plugin.fileHashManager.flush();
