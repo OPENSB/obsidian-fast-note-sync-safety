@@ -132,6 +132,16 @@ export class CloudAttachmentSafety {
         return this.afterServerFileExists(path, hash);
     }
 
+    private noteLinks(): Record<string, Record<string, number>> {
+        const cache = (this.plugin.app as { metadataCache?: { resolvedLinks?: Record<string, Record<string, number>> } }).metadataCache;
+        return cache?.resolvedLinks ?? {};
+    }
+
+    /** A saved note link is the only handle left after the local file is removed. */
+    private referencedBySavedNote(path: string): boolean {
+        return Object.values(this.noteLinks()).some(targets => (targets?.[path] ?? 0) > 0);
+    }
+
     private async localBytesMatch(snapshot: UploadSnapshot, file: TFile): Promise<boolean> {
         if (!this.stillAllowed(snapshot) || file.path !== snapshot.path || file.stat.size !== snapshot.size) return false;
         if (this.plugin.app.vault.getFileByPath(snapshot.path) !== file) return false;
@@ -162,13 +172,13 @@ export class CloudAttachmentSafety {
         return (await this.plugin.lockManager.withLock(snapshot.path, async () => {
             const file = this.plugin.app.vault.getFileByPath(snapshot.path);
             // Sync may rewrite mtime while the cloud copy is read back. Byte identity is the SHA-256.
-            if (!file || !await this.localBytesMatch(snapshot, file)) return false;
+            if (!file || !await this.localBytesMatch(snapshot, file) || !this.referencedBySavedNote(snapshot.path)) return false;
             const key = JSON.stringify([snapshot.scope, snapshot.path]);
             // Persist BEFORE the host emits delete events, including delayed callbacks.
             // The journal also protects the next full scan after a crash or restart.
             try {
                 await this.change(key, { scope: snapshot.scope, path: snapshot.path, sha256: snapshot.sha256, size: snapshot.size });
-                if (!await this.localBytesMatch(snapshot, file)) return false;
+                if (!await this.localBytesMatch(snapshot, file) || !this.referencedBySavedNote(snapshot.path)) return false;
                 await this.plugin.app.fileManager.trashFile(file);
                 this.plugin.fileHashManager.removeFileHash(snapshot.path);
                 this.plugin.fileHashManager.flush();
@@ -178,6 +188,48 @@ export class CloudAttachmentSafety {
                 if (this.plugin.app.vault.getFileByPath(snapshot.path)) await this.change(key);
             }
         })) === true;
+    }
+
+    /** Apply the current saved note links: clean referenced files, restore the others. */
+    async reconcile(): Promise<void> {
+        if (this.stopped || !this.plugin.settings.cloudPreviewAutoDeleteLocal) return;
+        await this.cleanupQueue.catch(() => {});
+        await this.initialize();
+        await this.restoreUnreferenced();
+        await this.cleanReferencedLocals();
+    }
+
+    private async restoreUnreferenced(): Promise<void> {
+        const entries = Array.from(this.entries.values()).filter(entry => entry.scope === this.scope() && !this.referencedBySavedNote(entry.path));
+        for (const entry of entries) {
+            if (this.referencedBySavedNote(entry.path)) continue;
+            if (this.plugin.app.vault.getFileByPath(entry.path)) {
+                await this.localPresent(entry.path);
+                continue;
+            }
+            let bytes: ArrayBuffer;
+            try { bytes = await this.plugin.api.getFileContentForVerification(entry.path, entry.size); }
+            catch { continue; }
+            if (bytes.byteLength !== entry.size || await this.sha256(bytes) !== entry.sha256) continue;
+            if (this.referencedBySavedNote(entry.path) || this.plugin.app.vault.getFileByPath(entry.path)) continue;
+            await this.plugin.app.vault.createBinary(entry.path, bytes);
+            await this.localPresent(entry.path);
+        }
+    }
+
+    private async cleanReferencedLocals(): Promise<void> {
+        const paths = new Set<string>();
+        for (const targets of Object.values(this.noteLinks())) {
+            for (const [path, count] of Object.entries(targets)) if (count > 0) paths.add(path);
+        }
+        for (const path of paths) {
+            const file = this.plugin.app.vault.getFileByPath(path);
+            if (!file || file.extension === "md" || !isCloudOnlyEligible(path, file.stat.size, this.plugin.settings)) continue;
+            const content = await this.plugin.app.vault.readBinary(file);
+            const hash = await hashArrayBuffer(content);
+            await this.prepareUpload(path, hash, content);
+            await this.confirmExistingUpload(path, hash);
+        }
     }
 
     stop(): void { this.stopped = true; this.pending.clear(); }
