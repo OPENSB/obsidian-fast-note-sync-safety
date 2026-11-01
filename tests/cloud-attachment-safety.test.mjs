@@ -203,6 +203,15 @@ test('an upload that no saved note references stays in the file list', async () 
   await f.stage(); assert.equal(await f.ack(), false);
   assert.equal(f.local.has(f.filePath), true); assert.equal(f.safety.protects(f.filePath), false);
 });
+test('a deleted local file whose note link is now unresolved stays in the cloud', async () => {
+  const f = await fixture(); await f.stage(); assert.equal(await f.ack(), true);
+  const name = f.filePath.split('/').pop();
+  f.plugin.app.metadataCache.resolvedLinks = {};
+  f.plugin.app.metadataCache.unresolvedLinks = { '笔记.md': { [name]: 1 } };
+  await f.safety.reconcile();
+  assert.equal(f.local.has(f.filePath), false);
+  assert.equal(f.safety.protects(f.filePath), true);
+});
 test('removing the last note reference downloads the cloud file back', async () => {
   const f = await fixture(); await f.stage(); assert.equal(await f.ack(), true);
   f.plugin.app.metadataCache.resolvedLinks = {};
