@@ -4,6 +4,7 @@ import { ViewPlugin, ViewUpdate, EditorView } from "@codemirror/view";
 import { hashContent, showSyncNotice, dumpError } from "../utils/helpers";
 import { CLIENT_TYPE } from "../utils/types";
 import type FastSync from "../../main";
+import { isCloudOnlyEligible } from "./cloud_attachment_policy";
 
 
 /**
@@ -561,18 +562,18 @@ export class FileCloudPreview {
     // typically discard the directory and return just "X.mp3" (or worse,
     // produce a path under the note's folder), causing the resulting cloud
     // URL to 404 on the server.
-    let vaultPath = filePath;
+    let vaultPath = this.plugin.cloudAttachmentSafety?.resolvePath(filePath, sourcePath) ?? filePath;
     interface VaultWithConfig {
       // Define getConfig method to avoid 'any' // 定义 getConfig 方法以避免 any
       getConfig?(key: string): unknown;
     }
     const rawConfig = ((this.plugin.app.vault as unknown) as VaultWithConfig).getConfig?.("attachmentFolderPath");
     const attachmentFolderPath = typeof rawConfig === "string" ? rawConfig : "";
-    if (this.plugin.settings.cloudPreviewDynamicAttachment) {
+    if (this.plugin.settings.cloudPreviewDynamicAttachment && vaultPath === filePath) {
       if (attachmentFolderPath) {
         const prefix = attachmentFolderPath.endsWith("/") ? attachmentFolderPath : attachmentFolderPath + "/";
         const suffix = vaultPath.startsWith("/") ? vaultPath.substring(1) : vaultPath;
-        vaultPath = prefix + suffix;
+        if (!suffix.startsWith(prefix)) vaultPath = prefix + suffix;
       }
     }
     const ext = this.getFileExtension(vaultPath);
@@ -638,6 +639,13 @@ export class FileCloudPreview {
         .replace(/{notePath}/g, sourcePath)
         .replace(/{attachmentFolderPath}/g, attachmentFolderPath);
     }
+
+    const known = this.plugin.cloudAttachmentSafety?.resolvePath(filePath, sourcePath);
+    const resolved = known
+      ? { path: known, size: this.plugin.cloudAttachmentSafety.knownSize(known) }
+      : await this.plugin.api.resolveFileForPreview(filePath, sourcePath, attachmentFolderPath);
+    if (!resolved || !isCloudOnlyEligible(resolved.path, resolved.size, this.plugin.settings)) return null;
+    vaultPath = resolved.path;
 
     const params = new URLSearchParams({
       vault,

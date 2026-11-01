@@ -161,6 +161,7 @@ export class EventManager {
   }
 
   private watchDelete = (file: TAbstractFile, ctx?: unknown) => {
+    if (this.plugin.cloudAttachmentSafety?.protects(file.path)) return
     // 检查 WebSocket 认证状态
     if (!this.plugin.websocket || !this.plugin.websocket.isAuth) {
       return

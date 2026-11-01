@@ -4,6 +4,7 @@ import { requestUrl } from "obsidian";
 import { hashContent, addRandomParam, showSyncNotice, dump, dumpError, nativeFetch, isAllowedRedirect } from "../utils/helpers";
 import { CLIENT_TYPE } from "../utils/types";
 import type FastSync from "../../main";
+import { normalizeCloudPath } from "../storage/cloud_attachment_policy";
 
 
 export interface NoteHistoryItem {
@@ -471,6 +472,54 @@ export class HttpApiService {
 
         const res = json as ApiResponse<FileInfoResponse>;
         return res.data;
+    }
+
+    /** Read back only a bounded small attachment before local eviction. No credentials in URLs. */
+    async getFileContentForVerification(path: string, expectedSize: number): Promise<ArrayBuffer> {
+        if (!Number.isSafeInteger(expectedSize) || expectedSize <= 0 || expectedSize > 20 * 1024 * 1024) {
+            throw new Error("Attachment exceeds the local cleanup verification limit.");
+        }
+        const base = (this.plugin.runApi || this.plugin.settings.api).replace(/\/+$/, "");
+        const params = new URLSearchParams({ vault: this.plugin.settings.vault, path, pathHash: hashContent(path), client: CLIENT_TYPE });
+        let timeout: number | undefined;
+        try {
+            const response = await Promise.race([
+                requestUrl({ url: `${base}/api/file?${params.toString()}`, method: "GET", throw: false,
+                    headers: { Authorization: `Bearer ${this.plugin.settings.apiToken}`, "x-client": CLIENT_TYPE,
+                        "Cache-Control": "no-cache", Range: `bytes=0-${expectedSize}` } }),
+                new Promise<never>((_, reject) => {
+                    timeout = window.setTimeout(() => reject(new Error("Attachment verification timed out.")), 20000);
+                }),
+            ]);
+            if (![200, 206].includes(response.status) || response.arrayBuffer.byteLength !== expectedSize) {
+                throw new Error("Cloud attachment bytes are unavailable or have changed size.");
+            }
+            return response.arrayBuffer;
+        } finally {
+            if (timeout !== undefined) window.clearTimeout(timeout);
+        }
+    }
+
+    /** Resolve short/relative embeds on a second device that has no local eviction journal. */
+    async resolveFileForPreview(link: string, source: string, attachmentFolder: string): Promise<{ path: string; size: number } | null> {
+        const direct = normalizeCloudPath(link);
+        const folder = source.split("/").slice(0, -1).join("/");
+        const relative = normalizeCloudPath(`${folder}/${link}`);
+        const attachment = normalizeCloudPath(`${attachmentFolder}/${link}`);
+        const candidates = link.startsWith(".") || !link.includes("/") ? [relative, direct, attachment] : [direct, relative, attachment];
+        for (const path of new Set(candidates)) {
+            try {
+                const info = await this.getFileInfo(path);
+                if (info && !info.isRecycle && info.path === path) return { path, size: info.size };
+            } catch { /* Try the next explicit path, never guess content after a failed request. */ }
+        }
+        if (link.includes("/")) return null;
+        try {
+            const page = await this.getFileList(1, 100, false, direct);
+            if (page.pager.totalRows > page.list.length) return null;
+            const matches = page.list.filter(file => file.path.split("/").at(-1) === direct);
+            return matches.length === 1 ? { path: matches[0].path, size: matches[0].size } : null;
+        } catch { return null; }
     }
 
     /**
