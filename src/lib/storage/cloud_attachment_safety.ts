@@ -132,14 +132,27 @@ export class CloudAttachmentSafety {
         return this.afterServerFileExists(path, hash);
     }
 
+    private metadataCache(): { resolvedLinks?: Record<string, Record<string, number>>; unresolvedLinks?: Record<string, Record<string, number>> } {
+        return (this.plugin.app as { metadataCache?: { resolvedLinks?: Record<string, Record<string, number>>; unresolvedLinks?: Record<string, Record<string, number>> } }).metadataCache ?? {};
+    }
+
     private noteLinks(): Record<string, Record<string, number>> {
-        const cache = (this.plugin.app as { metadataCache?: { resolvedLinks?: Record<string, Record<string, number>> } }).metadataCache;
-        return cache?.resolvedLinks ?? {};
+        return this.metadataCache().resolvedLinks ?? {};
     }
 
     /** A saved note link is the only handle left after the local file is removed. */
     private referencedBySavedNote(path: string): boolean {
-        return Object.values(this.noteLinks()).some(targets => (targets?.[path] ?? 0) > 0);
+        if (Object.values(this.noteLinks()).some(targets => (targets?.[path] ?? 0) > 0)) return true;
+        // Deleting the file turns a resolved embed into an unresolved link. That link still names the picture.
+        const name = path.split("/").pop() ?? path;
+        for (const targets of Object.values(this.metadataCache().unresolvedLinks ?? {})) {
+            for (const [link, count] of Object.entries(targets)) {
+                if (count <= 0) continue;
+                const bare = normalizeCloudPath(link.split("#")[0]);
+                if (bare === path || bare === name || bare.endsWith("/" + name)) return true;
+            }
+        }
+        return false;
     }
 
     private async localBytesMatch(snapshot: UploadSnapshot, file: TFile): Promise<boolean> {
