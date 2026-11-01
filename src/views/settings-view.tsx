@@ -78,7 +78,6 @@ const handleClipboardClick = (plugin: FastSync) => {
 export const SettingsView = ({ plugin }: { plugin: FastSync }) => {
   const [isConnected, setIsConnected] = useState<boolean>(plugin.websocket.isConnected());
   const [userInfo, setUserInfo] = useState<UserDTO | null>(null);
-  const [loadingUserInfo, setLoadingUserInfo] = useState<boolean>(false);
   const iconRef = useRef<HTMLSpanElement>(null);
   const isMounted = useRef(true);
 
@@ -103,24 +102,18 @@ export const SettingsView = ({ plugin }: { plugin: FastSync }) => {
   }, [plugin.websocket]);
 
   useEffect(() => {
-    if (isConnected && !userInfo && !loadingUserInfo) {
-      setLoadingUserInfo(true);
-      plugin.api.getUserInfo()
-        .then(data => {
-          if (!isMounted.current) return;
-          setUserInfo(data);
-          setLoadingUserInfo(false);
-        })
-        .catch(err => {
-          dump("Failed to fetch user info:", err);
-          if (!isMounted.current) return;
-          setLoadingUserInfo(false);
-        });
-    } else if (!isConnected && (userInfo || loadingUserInfo)) {
+    let current = true;
+    if (!isConnected) {
       setUserInfo(null);
-      setLoadingUserInfo(false);
+      return () => { current = false; };
     }
-  }, [isConnected, plugin.api, userInfo, loadingUserInfo]);
+    // Fetch at most once per connection/API instance. A rejected request must not
+    // toggle loading state into an immediate retry/render loop on Android.
+    void plugin.api.getUserInfo().then(data => {
+      if (current && isMounted.current) setUserInfo(data);
+    }).catch(err => { dump("Failed to fetch user info:", err); });
+    return () => { current = false; };
+  }, [isConnected, plugin.api]);
 
   useEffect(() => {
     if (iconRef.current) {

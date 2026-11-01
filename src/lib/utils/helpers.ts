@@ -307,6 +307,65 @@ export const isInWhitelist = function (path: string, plugin: FastSync): boolean 
   return whitelist.some((rule) => isPathMatch(normalizedPath, rule.pattern, rule.caseSensitive))
 }
 
+/** 这些插件的程序和配置固定留在本机，设置页不能取消。 */
+export const LOCKED_UNSYNCED_PLUGIN_IDS = ["obsidian42-brat"] as const
+
+const PLUGIN_ID_PATTERN = /^[A-Za-z0-9._-]+$/
+
+/**
+ * 当前设备整份不同步的插件 ID。BRAT 始终在内，白名单也不能恢复。
+ */
+export function unsyncedPluginIds(plugin: FastSync): string[] {
+  const configured = plugin.settings?.configSyncExcludedPluginIds
+  const ids = new Set<string>(LOCKED_UNSYNCED_PLUGIN_IDS)
+  if (Array.isArray(configured)) {
+    for (const id of configured) {
+      if (typeof id === "string" && PLUGIN_ID_PATTERN.test(id)) ids.add(id)
+    }
+  }
+  return [...ids]
+}
+
+function pluginManifests(plugin: FastSync): Record<string, { dir?: string }> {
+  const app = plugin.app as { plugins?: { manifests?: Record<string, { dir?: string }> } }
+  return app.plugins?.manifests ?? {}
+}
+
+function relativePluginFolder(dir: string, configDir: string): string | null {
+  const normalized = dir.replace(/\\/g, "/").replace(/\/+$/, "")
+  let relative = ""
+  if (normalized.startsWith(`${configDir}/plugins/`)) relative = normalized
+  else {
+    const marker = `/${configDir}/plugins/`
+    const index = normalized.lastIndexOf(marker)
+    if (index !== -1) relative = normalized.slice(index + 1)
+  }
+  const prefix = `${configDir}/plugins/`
+  if (!relative.startsWith(prefix)) return null
+  const folder = relative.slice(prefix.length)
+  if (!folder || folder.includes("/") || folder === "." || folder === "..") return null
+  return relative
+}
+
+function unsyncedPluginDirs(plugin: FastSync): string[] {
+  const configDir = plugin.app.vault.configDir.replace(/\\/g, "/")
+  const manifests = pluginManifests(plugin)
+  const dirs = new Set<string>()
+  for (const id of unsyncedPluginIds(plugin)) {
+    dirs.add(`${configDir}/plugins/${id}`)
+    const actual = manifests[id]?.dir
+    if (typeof actual === "string") {
+      const relative = relativePluginFolder(actual, configDir)
+      if (relative) dirs.add(relative)
+    }
+  }
+  return [...dirs]
+}
+
+function isUnsyncedPluginPath(normalizedPath: string, plugin: FastSync): boolean {
+  return unsyncedPluginDirs(plugin).some((dir) => normalizedPath === dir || normalizedPath.startsWith(`${dir}/`))
+}
+
 /**
  * 检查配置文件路径是否被排除
  */
@@ -317,6 +376,7 @@ export const configIsPathExcluded = function (relativePath: string, plugin: Fast
   // 固定排除插件自身的数据库和缓存文件，无论如何都不进行同步
   // Hard exclude the plugin's own database and cache files; do not sync them under any circumstances
   const pluginSelfDir = getPluginDir(plugin)
+  if (isUnsyncedPluginPath(normalizedPath, plugin)) return true
   if (
     normalizedPath === `${pluginSelfDir}/main.js` ||
     normalizedPath === `${pluginSelfDir}/manifest.json` ||

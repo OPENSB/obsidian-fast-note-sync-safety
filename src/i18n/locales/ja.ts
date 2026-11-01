@@ -2,6 +2,7 @@
 
 
 export default {
+  "setting.runtime_version": "実行中のバージョン：",
   "fns.desc": "プライベートデプロイに対応し、マルチ端末でのノート、添付ファイル、設定のリアルタイム同期＆バックアッププラグイン。Mac、Windows、Android、iOS などのプラットフォームをサポートし、multi-language にも対応しています。",
 
   "setting.tab.general": "一般",
@@ -79,6 +80,9 @@ export default {
   "setting.sync.hash_limit_desc": "1回の同期サイクル内でハッシュ計算が許可されるファイル数の最大値。制限を超えたファイルは今回の同期ではスキップされ、次の同期サイクルで処理が再開されます。デフォルト値は20000です。",
   "setting.sync.auto_config": "設定項目の同期",
   "setting.sync.auto_config_desc": "有効にすると、<b>${configDir}</b> ディレクトリ内のコア設定、プラグイン、外観、テーマなどの設定が同期されます。初回有効化時は、サーバー側の設定がローカル設定を上書きします。",
+  "setting.sync.exclude_plugins": "同期しないプラグイン",
+  "setting.sync.exclude_plugins_desc": "オンにしたプラグインのプログラムと設定はこの端末だけに残ります。アップロード、上書き、削除は行いません。同期のホワイトリストでも戻せません。BRAT は常に同期しません。パソコンとスマホの追跡バージョンが上書きし合うのを防ぐためです。この一覧自体は同期されません。",
+  "setting.sync.exclude_plugins_locked": "常に同期しない",
   "setting.sync.pdf_state": "PDF 状態の同期",
   "setting.sync.pdf_state_desc": "有効にすると、PDF ビューアの読書状態が同期されます。(この設定には設定項目の同期を有効にする必要があります)",
   "setting.sync.merge_strategy": "ノートのオフライン編集マージ戦略",

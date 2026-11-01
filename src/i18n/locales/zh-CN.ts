@@ -2,6 +2,7 @@
 
 
 export default {
+  "setting.runtime_version": "正在运行：",
   "config_safety.title": "处理配置删除冲突",
   "config_safety.explanation": "这些本地配置有改动，或缺少已确认的同步记录，但服务器已将其标记为删除。插件已暂停这些文件的自动上传和删除，请逐项选择。",
   "config_safety.empty": "没有待处理的配置删除冲突。",
@@ -88,6 +89,9 @@ export default {
   "setting.sync.hash_limit_desc": "单次同步周期内最大允许计算哈希的文件数。超出限制的文件将在本次同步中跳过，并在下次同步周期中继续处理。默认值为 20000。",
   "setting.sync.auto_config": "配置项同步",
   "setting.sync.auto_config_desc": "同步 <b>${configDir}</b> 下的设置、插件程序、主题和样式。首次比对时，同一路径采用服务端版本；仅本地存在的文件仍可上传。首次比对前的本地修改不会直接上传。Fast Note Sync 自身的连接设置和同步索引只保存在本设备。",
+  "setting.sync.exclude_plugins": "不同步的插件",
+  "setting.sync.exclude_plugins_desc": "勾选后，该插件的程序和配置只留在本设备，不会上传、覆盖或删除。白名单不能把它们重新纳入同步。BRAT 固定不同步，避免电脑和手机的跟踪版本互相覆盖。这份名单保存在本机，不会随配置同步到其他设备。",
+  "setting.sync.exclude_plugins_locked": "固定不同步",
   "setting.sync.pdf_state": "PDF 状态同步",
   "setting.sync.pdf_state_desc": "开启后，将同步 PDF 查看器的阅读状态。 (本设置需要开启配置项同步)",
   "setting.sync.merge_strategy": "笔记离线编辑冲突合并策略",

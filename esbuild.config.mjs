@@ -1,5 +1,20 @@
 import esbuild from "esbuild";
 import process from "process";
+import fs from "node:fs";
+import path from "node:path";
+import { createHash } from "node:crypto";
+
+const version = JSON.parse(fs.readFileSync("manifest.json", "utf8")).version;
+const sourceFiles = dir => fs.readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
+	const file = path.join(dir, entry.name);
+	return entry.isDirectory() ? sourceFiles(file) : [file];
+});
+const buildHash = createHash("sha256");
+for (const file of [...sourceFiles("src"), "manifest.json", "package.json", "pnpm-lock.yaml", "esbuild.config.mjs"].sort()) {
+	buildHash.update(file.replaceAll(path.sep, "/"));
+	buildHash.update(fs.readFileSync(file));
+}
+const buildId = buildHash.digest("hex").slice(0, 12);
 
 const banner =
 `/*
@@ -16,6 +31,10 @@ const context = await esbuild.context({
 	},
 	entryPoints: ["src/main.ts"],
 	bundle: true,
+	define: {
+		__FNS_BUILD_VERSION__: JSON.stringify(version),
+		__FNS_BUILD_ID__: JSON.stringify(buildId),
+	},
 	external: [
 		"obsidian",
 		"electron",

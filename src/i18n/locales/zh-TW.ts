@@ -2,6 +2,7 @@
 
 
 export default {
+  "setting.runtime_version": "正在執行：",
   "config_safety.title": "處理設定刪除衝突",
   "config_safety.explanation": "這些本機設定有變更，或缺少已確認的同步記錄，但伺服器已標記為刪除。外掛已暫停這些檔案的自動上傳和刪除，請逐項選擇。",
   "config_safety.empty": "沒有待處理的設定刪除衝突。",
@@ -88,6 +89,9 @@ export default {
   "setting.sync.hash_limit_desc": "單次同步週期內最大允許計算雜湊的檔案數。超出限制的檔案將在本次同步中跳過，並在下次同步週期中繼續處理。預設值為 20000。",
   "setting.sync.auto_config": "配置項同步",
   "setting.sync.auto_config_desc": "同步 <b>${configDir}</b> 下的設定、外掛程式、主題和樣式。首次比對時，同一路徑採用伺服器版本；僅本機存在的檔案仍可上傳。首次比對前的本機變更不會直接上傳。Fast Note Sync 自身連線設定和同步索引只保存在本裝置。",
+  "setting.sync.exclude_plugins": "不同步的外掛",
+  "setting.sync.exclude_plugins_desc": "勾選後，該外掛的程式和設定只留在本裝置，不會上傳、覆蓋或刪除。白名單不能把它們重新納入同步。BRAT 固定不同步，避免電腦和手機的追蹤版本互相覆蓋。這份名單保存在本機，不會隨設定同步到其他裝置。",
+  "setting.sync.exclude_plugins_locked": "固定不同步",
   "setting.sync.pdf_state": "PDF 狀態同步",
   "setting.sync.pdf_state_desc": "開啟後，將同步 PDF 檢視器的閱讀狀態。 (本設定需要開啟配置項同步)",
   "setting.sync.merge_strategy": "筆記離線編輯衝突合併策略",

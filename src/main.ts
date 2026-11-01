@@ -18,6 +18,7 @@ import { SyncLogManager } from "./lib/sync/sync_log_manager";
 import { DebugLogModal } from "./views/debug-log-modal";
 import { VersionManager } from "./lib/utils/version_manager";
 import { CloudAttachmentSafety } from "./lib/storage/cloud_attachment_safety";
+import { RUNTIME_VERSION, RUNTIME_BUILD_ID } from "./lib/utils/build_info";
 import { ConfigSafety } from "./lib/sync/config_safety";
 import { ConfigDeleteConflictsModal } from "./views/config-delete-conflicts-modal";
 import { ConfigManager } from "./lib/sync/config_manager";
@@ -51,6 +52,8 @@ interface LegacySettings extends Partial<PluginSettings> {
 
 
 export default class FastSync extends Plugin {
+  readonly runtimeVersion = RUNTIME_VERSION
+  readonly runtimeBuildId = RUNTIME_BUILD_ID
   // ─── Obsidian Plugin lifecycle + Manager instances ───────────────────────────
   settingTab: SettingTab                           // 设置面板
   settings: PluginSettings                        // 插件设置
@@ -670,6 +673,9 @@ export default class FastSync extends Plugin {
     const data = await this.loadData() as LegacySettings | null
     this.settings = Object.assign({}, DEFAULT_SETTINGS, data)
     if (!Array.isArray(this.settings.cloudPreviewMediaTypes)) this.settings.cloudPreviewMediaTypes = []
+    this.settings.configSyncExcludedPluginIds = Array.isArray(this.settings.configSyncExcludedPluginIds)
+      ? [...this.settings.configSyncExcludedPluginIds]
+      : [...DEFAULT_SETTINGS.configSyncExcludedPluginIds]
     if (!Number.isFinite(this.settings.cloudPreviewMaxSizeMb)) this.settings.cloudPreviewMaxSizeMb = 0
 
     let hasMigration = false
@@ -960,6 +966,7 @@ export default class FastSync extends Plugin {
     }
 
     setLogEnabled(this.settings.logEnabled || "off")
+    dump("[Runtime] Plugin services ready", { version: RUNTIME_VERSION, build: RUNTIME_BUILD_ID, logMode: this.settings.logEnabled })
   }
 
   /**

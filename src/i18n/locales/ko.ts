@@ -2,6 +2,7 @@
 
 
 export default {
+  "setting.runtime_version": "실행 중인 버전: ",
   "fns.desc": "프라이빗 배포가 가능한 멀티플랫폼 노트, 첨부파일, 설정 실시간 동기화 및 백업 플러그인입니다. Mac, Windows, Android, iOS 등 다양한 플랫폼을 지원하며 multi-language 를 제공합니다.",
 
   "setting.tab.general": "일반",
@@ -79,6 +80,9 @@ export default {
   "setting.sync.hash_limit_desc": "단일 동기화 주기 내에서 해시 계산을 허용하는 최대 파일 수입니다. 제한을 초과하는 파일은 이번 동기화에서 건너뛰며 다음 동기화 주기에서 계속 처리됩니다. 기본값은 20000입니다.",
   "setting.sync.auto_config": "구성 항목 동기화",
   "setting.sync.auto_config_desc": "활성화하면 <b>${configDir}</b> 디렉토리의 핵심 설정, 플러그인, 외관, 테마 등의 설정이 동기화됩니다. 최초 활성화 시 서버 설정이 로컬 설정을 덮어씁니다.",
+  "setting.sync.exclude_plugins": "동기화하지 않을 플러그인",
+  "setting.sync.exclude_plugins_desc": "선택한 플러그인의 프로그램과 설정은 이 기기에만 남습니다. 업로드, 덮어쓰기, 삭제를 하지 않습니다. 동기화 허용 목록으로도 다시 포함할 수 없습니다. BRAT는 항상 동기화하지 않아 컴퓨터와 휴대폰의 추적 버전이 서로 덮어쓰지 않습니다. 이 목록 자체는 동기화되지 않습니다.",
+  "setting.sync.exclude_plugins_locked": "항상 동기화하지 않음",
   "setting.sync.pdf_state": "PDF 상태 동기화",
   "setting.sync.pdf_state_desc": "활성화하면 PDF 뷰어의 읽기 상태를 동기화합니다. (이 설정은 설정 동기화를 활성화해야 합니다)",
   "setting.sync.merge_strategy": "오프라인 편집 충돌 병합 전략",

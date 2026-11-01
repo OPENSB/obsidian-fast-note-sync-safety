@@ -348,3 +348,47 @@ test('explicit Keep local uploads even if the local content matches an old cache
 });
 
 export { fixture, load, helpers, config, files, target, root };
+
+test('BRAT installation and per-device tracked version cannot be synced in either direction', async () => {
+  const f = fixture();
+  for (const name of ['main.js', 'manifest.json', 'styles.css', 'data.json', 'nested/cache.json']) {
+    const path = '.obsidian/plugins/obsidian42-brat/' + name;
+    f.plugin.settings.syncExcludeWhitelist = JSON.stringify([{ pattern: path }]);
+    assert.equal(helpers.configIsPathExcluded(path, f.plugin), true);
+    assert.equal(helpers.configIsPathExcluded(path.replaceAll('/', '\\'), f.plugin), true);
+    f.data.set(path, { text: 'device-local BRAT state', mtime: 50 });
+    await config.receiveConfigSyncModify({ path, content: 'other device state', lastTime: 999 }, f.plugin);
+    await config.receiveConfigSyncDelete({ path, lastTime: 999 }, f.plugin);
+    await config.receiveConfigSyncMtime({ path, mtime: 999 }, f.plugin);
+    await config.receiveConfigUpload({ path }, f.plugin);
+    await config.configModify(path, f.plugin, false, 'device-local BRAT state', true);
+    await config.configDelete(path, f.plugin);
+    assert.equal(f.data.get(path).text, 'device-local BRAT state');
+    assert.equal(f.data.get(path).mtime, 50);
+  }
+  assert.equal(f.sent.length, 0);
+  assert.equal(helpers.configIsPathExcluded(target, f.plugin), false);
+});
+
+test('a chosen plugin stays on this device and a whitelist cannot restore it', async () => {
+  const f = fixture();
+  f.plugin.settings.configSyncExcludedPluginIds = ['calendar'];
+  f.plugin.app.plugins = { manifests: { calendar: { id: 'calendar', dir: '.obsidian/plugins/CalendarRenamed' } } };
+  for (const path of ['.obsidian/plugins/calendar/data.json', '.obsidian/plugins/CalendarRenamed/styles.css']) {
+    f.plugin.settings.syncExcludeWhitelist = JSON.stringify([{ pattern: path }]);
+    assert.equal(helpers.configIsPathExcluded(path, f.plugin), true);
+    assert.equal(helpers.configIsPathExcluded(path.replaceAll('/', '\\'), f.plugin), true);
+    f.data.set(path, { text: 'local plugin state', mtime: 50 });
+    await config.receiveConfigSyncModify({ path, content: 'other device', lastTime: 999 }, f.plugin);
+    await config.receiveConfigSyncDelete({ path, lastTime: 999 }, f.plugin);
+    await config.configModify(path, f.plugin, false, 'local plugin state', true);
+    assert.equal(f.data.get(path).text, 'local plugin state');
+  }
+  assert.equal(f.sent.length, 0);
+  assert.equal(helpers.configIsPathExcluded(target, f.plugin), false);
+  f.plugin.settings.configSyncExcludedPluginIds = ['../secret', 'calendar/../../app'];
+  assert.equal(helpers.configIsPathExcluded('.obsidian/secret', f.plugin), false);
+  assert.equal(helpers.configIsPathExcluded('.obsidian/app', f.plugin), false);
+  delete f.plugin.settings.configSyncExcludedPluginIds;
+  assert.equal(helpers.configIsPathExcluded('.obsidian/plugins/obsidian42-brat/data.json', f.plugin), true);
+});

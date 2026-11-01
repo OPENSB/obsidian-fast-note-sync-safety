@@ -1,6 +1,7 @@
 import { DebugLogManager } from "./utils/debug_log_manager";
+import { formatDiagnostic } from "./utils/redact_log";
 
-export let logLevel = "off";
+export let logLevel = "internal";
 
 export const setLogEnabled = (level) => {
   logLevel = level;
@@ -8,7 +9,7 @@ export const setLogEnabled = (level) => {
 
 export const dump = function (...message) {
   if (logLevel === "console") {
-    console.log(...message);
+    console.log(...message.map(formatDiagnostic));
   } else if (logLevel === "internal") {
     DebugLogManager.getInstance().addLog(...message);
   }
@@ -16,7 +17,7 @@ export const dump = function (...message) {
 
 export const dumpError = function (...message) {
   if (logLevel === "console") {
-    console.error(...message);
+    console.error(...message.map(formatDiagnostic));
   } else if (logLevel === "internal") {
     DebugLogManager.getInstance().addLog("[ERROR]", ...message);
   }
