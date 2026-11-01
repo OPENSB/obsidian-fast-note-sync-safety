@@ -2,7 +2,7 @@ import { TFile, TAbstractFile, normalizePath, Platform } from "obsidian";
 
 import { ReceiveFileSyncUpdateMessage, FileUploadMessage, FileSyncChunkDownloadMessage, FileDownloadSession, ReceiveMtimeMessage, ReceivePathMessage, SyncEndData } from "../utils/types";
 import { hashContent, hashArrayBuffer, getPluginDir, dump, dumpError, sleep, isFolderSyncPathExcluded, getSafeCtime, isLargeBinarySyncRisk, describeBinarySyncLimit, showSyncNotice, checkAndNotifyCaseConflict, logMemorySnapshot, hashFileAsync, vaultDelete } from "../utils/helpers";
-import { FileCloudPreview } from "../storage/file_cloud_preview";
+import { isCloudOnlyEligible } from "../storage/cloud_attachment_policy";
 import { SyncLogManager } from "./sync_log_manager";
 import { HttpApiService } from "../api/http_api_service";
 import type FastSync from "../../main";
@@ -207,6 +207,7 @@ export const fileModify = async function (file: TAbstractFile, plugin: FastSync,
   if (file.path.endsWith(".md")) return
   if (eventEnter && plugin.isIgnoredFile(file.path)) return
   if (isFolderSyncPathExcluded(file.path, plugin)) return
+  await plugin.cloudAttachmentSafety?.localPresent(file.path)
 
   if (isLargeBinarySyncRisk(file.stat.size, plugin)) {
     dump(`Skip file modify for large attachment (${describeBinarySyncLimit()} limit): ${file.path}`, file.stat.size)
@@ -249,10 +250,18 @@ export const fileModify = async function (file: TAbstractFile, plugin: FastSync,
       // 新建操作覆盖删除意图，清除 pending 防止晚到的 Ack 错误删除新文件 hash
       // New upload supersedes delete intent; clear pending to prevent stale Ack from removing new hash
       plugin.pendingFileDeleteAcks.delete(file.path)
+      await plugin.cloudAttachmentSafety?.prepareUpload(file.path, contentHash).catch(() => dump("Cloud cleanup snapshot unavailable; keeping local attachment."))
       plugin.pendingUploadHashes.set(file.path, contentHash)
       plugin.localStorageManager.savePending('pendingUploadHashes', plugin.pendingUploadHashes)
       await plugin.concurrencyLimiter.waitForSlot(file.path)
       void plugin.websocket.SendMessage("FileUploadCheck", data)
+      void plugin.cloudAttachmentSafety?.confirmExistingUpload(file.path, contentHash).then(cleaned => {
+        if (cleaned && plugin.pendingUploadHashes.get(file.path) === contentHash) {
+          plugin.pendingUploadHashes.delete(file.path)
+          plugin.localStorageManager.savePending('pendingUploadHashes', plugin.pendingUploadHashes)
+          plugin.concurrencyLimiter.releaseSlot(file.path)
+        }
+      }).catch(() => dumpError("Cloud attachment confirmation failed; local file retained."))
       dump(`File modify check sent`, data.path, data.contentHash)
     } finally {
       plugin.removeIgnoredFile(file.path)
@@ -264,6 +273,7 @@ export const fileModify = async function (file: TAbstractFile, plugin: FastSync,
  * 文件删除事件处理
  */
 export const fileDelete = async function (file: TAbstractFile, plugin: FastSync, eventEnter: boolean = false) {
+  if (plugin.cloudAttachmentSafety?.protects(file.path)) return
   if (plugin.settings.syncEnabled == false || plugin.settings.readonlySyncEnabled) return
   if (!(file instanceof TFile)) return
   if (file.path.endsWith(".md")) return
@@ -319,6 +329,7 @@ export const fileDelete = async function (file: TAbstractFile, plugin: FastSync,
  * Send file delete message by path string (for scenarios where TFile object is unavailable, e.g., old path after rename)
  */
 export const fileDeleteByPath = async function (filePath: string, plugin: FastSync) {
+  if (plugin.cloudAttachmentSafety?.protects(filePath)) return
   if (plugin.settings.syncEnabled == false || plugin.settings.readonlySyncEnabled) return
   if (filePath.endsWith(".md")) return
   if (isFolderSyncPathExcluded(filePath, plugin)) return
@@ -516,7 +527,8 @@ export const receiveFileUpload = async function (data: FileUploadMessage, plugin
         return;
       }
 
-      const contentHash = await hashFileAsync(plugin.app, file.path)
+      const contentHash = await hashArrayBuffer(content)
+      await plugin.cloudAttachmentSafety?.prepareUpload(file.path, contentHash, content).catch(() => dump("Cloud cleanup snapshot unavailable; keeping local attachment."))
       logMemorySnapshot(`after upload hash ${data.path}`)
       // 将 hash 暂存到 pending map，等待服务端 FileUploadAck 后再写入 hashManager
       // Temporarily store hash in pending map, update hashManager only after server FileUploadAck
@@ -664,46 +676,7 @@ export const receiveFileUpload = async function (data: FileUploadMessage, plugin
       // 手动置空辅助 GC
       content = null;
 
-      // 上传完成后，如果开启了附件云预览 - 上传后删除，则删除本地附件
-      if (plugin.settings.cloudPreviewEnabled && plugin.settings.cloudPreviewAutoDeleteLocal) {
-        const ext = file.path.substring(file.path.lastIndexOf(".")).toLowerCase();
-        const isRestricted = FileCloudPreview.isRestrictedType(ext);
 
-        // 如果开启了类型限制，则仅删除受限类型 (图片/音频/视频/PDF)
-        // 如果未开启类型限制，则全部删除
-        if (plugin.settings.cloudPreviewTypeRestricted && !isRestricted) {
-          return;
-        }
-
-        void (async () => {
-          await sleep(2000);
-          if (isPluginUnloading) return;
-          try {
-            const apiService = new HttpApiService(plugin);
-            const serverInfo = await apiService.getFileInfo(file.path);
-
-            if (serverInfo) {
-              // 核对 path、size、mtime 是否一致
-              if (serverInfo.path === file.path &&
-                serverInfo.size === file.stat.size &&
-                serverInfo.mtime === file.stat.mtime) {
-                dump(`Cloud Preview: Auto delete verified file: ${file.path}`);
-                plugin.addIgnoredFile(file.path);
-                try {
-                  await vaultDelete(plugin.app.vault, file);
-                  plugin.fileHashManager.removeFileHash(file.path);
-                } finally {
-                  plugin.removeIgnoredFile(file.path);
-                }
-              } else {
-                dump(`Cloud Preview: Auto delete skip, info mismatch for ${file.path}`, { server: serverInfo, local: file.stat });
-              }
-            }
-          } catch (e) {
-            dump(`Cloud Preview: Auto delete failed to fetch info for ${file.path}`, e);
-          }
-        })();
-      }
     } catch (e) {
       dump(`Upload process error for ${data.path}`, e);
       // 异常退出时清除 checkpoint，避免下次用无效的 sessionId 继续
@@ -744,22 +717,12 @@ export const receiveFileSyncUpdate = async function (data: ReceiveFileSyncUpdate
   }
 
   // 如果开启了云预览，且是初始化同步阶段，由于云预览可以按需加载，跳过所有附件下载
-  if (plugin.localStorageManager.getMetadata("isInitSync") && plugin.settings.cloudPreviewEnabled) {
-    if (plugin.settings.cloudPreviewTypeRestricted) {
-      // 开启了类型限制：仅跳过受限类型 (图片、视频、音频、PDF)
-      const ext = data.path.substring(data.path.lastIndexOf(".")).toLowerCase();
-      if (FileCloudPreview.isRestrictedType(ext)) {
-        dump(`Cloud Preview: Skipping restricted file download: ${data.path}`);
-        plugin.recordSyncCompleted('file', data.pageIndex);
-        return;
-      }
-    } else {
-      // 未开启类型限制：由于启用了云预览，跳过所有附件下载
-      dump(`Cloud Preview: Skipping all file downloads: ${data.path}`);
-      plugin.recordSyncCompleted('file', data.pageIndex);
-      return;
-    }
+  if (isCloudOnlyEligible(data.path, data.size, plugin.settings)
+      && !plugin.app.vault.getFileByPath(normalizePath(data.path))) {
+    plugin.recordSyncCompleted('file', data.pageIndex);
+    return;
   }
+
 
   // 等待并发槽位，防止大量并发下载导致内存耗尽
   const slotKey = `download_${data.path}`
@@ -818,20 +781,7 @@ export const receiveFileSyncDelete = async function (data: ReceivePathMessage, p
     return
   }
 
-  if (plugin.localStorageManager.getMetadata("isInitSync") && plugin.settings.cloudPreviewEnabled) {
-    if (plugin.settings.cloudPreviewTypeRestricted) {
-      const ext = data.path.substring(data.path.lastIndexOf(".")).toLowerCase();
-      if (FileCloudPreview.isRestrictedType(ext)) {
-        dump(`Cloud Preview: Skipping restricted file delete: ${data.path}`);
-        plugin.recordSyncCompleted('file', data.pageIndex);
-        return;
-      }
-    } else {
-      dump(`Cloud Preview: Skipping all file deletes: ${data.path}`);
-      plugin.recordSyncCompleted('file', data.pageIndex);
-      return;
-    }
-  }
+
 
   dump(`Receive file delete: `, data.path)
   const normalizedPath = normalizePath(data.path)
@@ -879,20 +829,7 @@ export const receiveFileSyncMtime = async function (data: ReceiveMtimeMessage, p
     return
   }
 
-  if (plugin.localStorageManager.getMetadata("isInitSync") && plugin.settings.cloudPreviewEnabled) {
-    if (plugin.settings.cloudPreviewTypeRestricted) {
-      const ext = data.path.substring(data.path.lastIndexOf(".")).toLowerCase();
-      if (FileCloudPreview.isRestrictedType(ext)) {
-        dump(`Cloud Preview: Skipping restricted file mtime update: ${data.path}`);
-        plugin.recordSyncCompleted('file', data.pageIndex);
-        return;
-      }
-    } else {
-      dump(`Cloud Preview: Skipping all file mtime updates: ${data.path}`);
-      plugin.recordSyncCompleted('file', data.pageIndex);
-      return;
-    }
-  }
+
 
   dump(`Receive file sync mtime: `, data.path, data.mtime)
   const normalizedPath = normalizePath(data.path)
@@ -936,6 +873,14 @@ export const receiveFileSyncMtime = async function (data: ReceiveMtimeMessage, p
   // FileSyncMtime indicates file already exists on server (no upload needed), release slot acquired by fileModify
   if (data.path) plugin.concurrencyLimiter.releaseSlot(data.path)
   plugin.recordSyncCompleted('file', data.pageIndex)
+  const existingHash = plugin.pendingUploadHashes.get(data.path)
+  if (existingHash !== undefined) void plugin.cloudAttachmentSafety?.afterServerFileExists(data.path, existingHash)
+    .then(cleaned => {
+      if (cleaned && plugin.pendingUploadHashes.get(data.path) === existingHash) {
+        plugin.pendingUploadHashes.delete(data.path)
+        plugin.localStorageManager.savePending('pendingUploadHashes', plugin.pendingUploadHashes)
+      }
+    }).catch(() => dumpError("Existing cloud attachment verification failed; local file retained."))
 }
 
 /**
@@ -1414,6 +1359,7 @@ const handleFileChunkDownloadComplete = async function (session: FileDownloadSes
       } else {
         dump(`Download complete: using server provided hash: ${session.path}`, contentHash)
       }
+      await plugin.cloudAttachmentSafety?.localPresent(session.path)
       plugin.fileHashManager.setFileHash(session.path, contentHash, session.mtime, session.size)
       // 记录同步后的 mtime
       plugin.lastSyncMtime.set(session.path, session.mtime)
@@ -1468,6 +1414,7 @@ export const receiveFileRenameAck = function (data: { lastTime?: number }, plugi
 // 收到 FileUploadAck，将 pending hash 转移到正式 hashManager 并更新 lastFileSyncTime
 // Receive FileUploadAck, move pending hash to formal hashManager and update lastFileSyncTime
 export const receiveFileUploadAck = function (data: { lastTime?: number; path?: string; pathHash?: string }, plugin: FastSync) {
+  const acknowledgedHash = data.path ? plugin.pendingUploadHashes.get(data.path) : undefined
   // 服务端确认上传成功，将 pending hash 转移到正式 hashManager
   // Server confirmed upload success, move pending hash to formal hashManager
   if (data.path) {
@@ -1498,6 +1445,8 @@ export const receiveFileUploadAck = function (data: { lastTime?: number; path?: 
   const pushPageIndex = data.path ? plugin.syncState.pendingFilePushPageIndex.get(data.path) : undefined;
   if (data.path) plugin.syncState.pendingFilePushPageIndex.delete(data.path)
   plugin.recordSyncCompleted('file', pushPageIndex)
+  if (data.path) void plugin.cloudAttachmentSafety?.afterUploadAck(data.path, acknowledgedHash)
+    .catch(() => dumpError("Cloud attachment verification/cleanup failed; local file retained."))
 }
 
 // 收到 FileDeleteAck，仅当路径仍在 pending set 中时才从 hashManager 移除

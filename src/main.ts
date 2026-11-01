@@ -17,6 +17,7 @@ import { DebugLogManager } from "./lib/utils/debug_log_manager";
 import { SyncLogManager } from "./lib/sync/sync_log_manager";
 import { DebugLogModal } from "./views/debug-log-modal";
 import { VersionManager } from "./lib/utils/version_manager";
+import { CloudAttachmentSafety } from "./lib/storage/cloud_attachment_safety";
 import { ConfigSafety } from "./lib/sync/config_safety";
 import { ConfigDeleteConflictsModal } from "./views/config-delete-conflicts-modal";
 import { ConfigManager } from "./lib/sync/config_manager";
@@ -66,6 +67,7 @@ export default class FastSync extends Plugin {
   fileHashManager: FileHashManager                // 文件哈希管理器
   configHashManager: ConfigHashManager            // 配置哈希管理器
   localStorageManager: LocalStorageManager        // 本地存储管理器
+  cloudAttachmentSafety: CloudAttachmentSafety
   fileCloudPreview: FileCloudPreview              // 云端文件预览管理器
   folderSnapshotManager: FolderSnapshotManager    // 文件夹快照管理器
   statusBarManager: StatusBarManager              // 状态栏管理器
@@ -542,6 +544,8 @@ export default class FastSync extends Plugin {
       this.fileHashManager = new FileHashManager(this)
       this.configHashManager = new ConfigHashManager(this)
       this.folderSnapshotManager = new FolderSnapshotManager(this)
+      this.cloudAttachmentSafety = new CloudAttachmentSafety(this)
+      await this.cloudAttachmentSafety.initialize()
       this.configSafety = new ConfigSafety(this)
       await this.configSafety.initialize()
       this.addCommand({ id: "resolve-config-deletions", name: $("config_safety.title"),
@@ -647,6 +651,7 @@ export default class FastSync extends Plugin {
     // 取消当前正在进行的同步，重置运行时状态
     cancelSync(this)
     abortAllFileOperations()
+    this.cloudAttachmentSafety?.stop()
     this.localStorageManager?.stopWatch()
     this.shareIndicatorManager?.unload()
     this.menuManager?.unload()
@@ -664,6 +669,8 @@ export default class FastSync extends Plugin {
   async loadSettings() {
     const data = await this.loadData() as LegacySettings | null
     this.settings = Object.assign({}, DEFAULT_SETTINGS, data)
+    if (!Array.isArray(this.settings.cloudPreviewMediaTypes)) this.settings.cloudPreviewMediaTypes = []
+    if (!Number.isFinite(this.settings.cloudPreviewMaxSizeMb)) this.settings.cloudPreviewMaxSizeMb = 0
 
     let hasMigration = false
 

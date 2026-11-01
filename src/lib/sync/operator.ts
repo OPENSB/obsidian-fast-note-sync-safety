@@ -6,7 +6,7 @@ import { receiveConfigSyncModify, receiveConfigUpload, receiveConfigSyncMtime, r
 import { receiveNoteSyncModify, receiveNoteUpload, receiveNoteSyncMtime, receiveNoteSyncDelete, receiveNoteSyncEnd, receiveNoteSyncRename, receiveNoteModifyAck, receiveNoteRenameAck, receiveNoteDeleteAck } from "./operator_note";
 import { SyncMode, SnapFile, SnapFolder, SyncEndData, PathHashFile, NoteSyncData, FileSyncData, ConfigSyncData, FolderSyncData } from "../utils/types";
 import { receiveFolderSyncModify, receiveFolderSyncDelete, receiveFolderSyncRename, receiveFolderSyncEnd } from "./operator_folder";
-import { FileCloudPreview } from "../storage/file_cloud_preview";
+
 import { SyncLogManager } from "./sync_log_manager";
 import * as WSAction from "./websocket_action";
 import type FastSync from "../../main";
@@ -593,6 +593,7 @@ export const handleSync = async function (plugin: FastSync, isLoadLastTime: bool
       dump("Read-only mode: Proceeding with state gathering for remote-to-local sync.");
     }
 
+    await plugin.cloudAttachmentSafety?.initialize();
     plugin.currentSyncType = isLoadLastTime ? 'incremental' : 'full';
     plugin.syncTypeCompleteCount = 0;
     plugin.resetSyncTasks();
@@ -612,9 +613,7 @@ export const handleSync = async function (plugin: FastSync, isLoadLastTime: bool
     const activeTypes: SyncType[] = [];
     if (plugin.settings.syncEnabled && shouldSyncNotes) {
       activeTypes.push('note', 'folder');
-      if (!plugin.settings.cloudPreviewEnabled || plugin.settings.cloudPreviewTypeRestricted) {
-        activeTypes.push('file');
-      }
+      activeTypes.push('file');
     }
     if (plugin.settings.configSyncEnabled && shouldSyncConfigs) {
       activeTypes.push('setting');
@@ -661,9 +660,7 @@ export const handleSync = async function (plugin: FastSync, isLoadLastTime: bool
     if (plugin.settings.syncEnabled && shouldSyncNotes) {
       expectedCount += 1; // NoteSync
       expectedCount += 1; // FolderSync
-      if (!plugin.settings.cloudPreviewEnabled || plugin.settings.cloudPreviewTypeRestricted) {
-        expectedCount += 1; // FileSync
-      }
+      expectedCount += 1; // FileSync
     }
     if (plugin.settings.configSyncEnabled && shouldSyncConfigs) expectedCount += 1;
     plugin.expectedSyncCount = expectedCount;
@@ -701,8 +698,6 @@ export const handleSync = async function (plugin: FastSync, isLoadLastTime: bool
       plugin.noteSyncEnd = true;
       plugin.fileSyncEnd = true;
       plugin.folderSyncEnd = true;
-    } else if (plugin.settings.cloudPreviewEnabled && !plugin.settings.cloudPreviewTypeRestricted) {
-      plugin.fileSyncEnd = true;
     }
     if (!(plugin.settings.configSyncEnabled && shouldSyncConfigs)) {
       plugin.configSyncEnd = true;
@@ -829,8 +824,7 @@ export const handleSync = async function (plugin: FastSync, isLoadLastTime: bool
               if (isLargeBinarySyncRisk(file.stat.size, plugin)) continue;
               const attachmentLimit = (plugin.settings.attachmentSyncLimit ?? 50) * 1024 * 1024;
               if (file.stat.size > attachmentLimit) continue;
-              const skipSync = plugin.settings.cloudPreviewEnabled && (!plugin.settings.cloudPreviewTypeRestricted || FileCloudPreview.isRestrictedType("." + file.extension));
-              if (skipSync) continue;
+
 
               if (isLoadLastTime
                 && file.stat.mtime < Number(plugin.localStorageManager.getMetadata("lastFileSyncTime"))
@@ -906,7 +900,7 @@ export const handleSync = async function (plugin: FastSync, isLoadLastTime: bool
         let delCount = 0;
         for (const path of trackedPaths) {
           if (++delCount % 100 === 0) await yieldToMain();
-          if (isPathExcluded(path, plugin)) continue;
+          if (isPathExcluded(path, plugin) || plugin.cloudAttachmentSafety?.protects(path)) continue;
           if (!localPathsSet.has(path)) {
             const item = { path: path, pathHash: hashContent(path) };
             if (path.endsWith(".md")) {
@@ -924,7 +918,7 @@ export const handleSync = async function (plugin: FastSync, isLoadLastTime: bool
           let folderCount = 0;
           for (const path of trackedFolderPaths) {
             if (++folderCount % 100 === 0) await yieldToMain();
-            if (isFolderSyncPathExcluded(path, plugin)) continue;
+            if (isFolderSyncPathExcluded(path, plugin) || plugin.cloudAttachmentSafety?.protects(path)) continue;
             if (!localFolderPathsSet.has(path)) {
               delFolders.push({ path: path, pathHash: hashContent(path) });
             }
@@ -937,7 +931,7 @@ export const handleSync = async function (plugin: FastSync, isLoadLastTime: bool
         let missingCount = 0;
         for (const path of trackedPaths) {
           if (++missingCount % 100 === 0) await yieldToMain();
-          if (isPathExcluded(path, plugin)) continue;
+          if (isPathExcluded(path, plugin) || plugin.cloudAttachmentSafety?.protects(path)) continue;
           if (!localPathsSet.has(path)) {
             const item = { path: path, pathHash: hashContent(path) };
             if (path.endsWith(".md")) {
@@ -955,7 +949,7 @@ export const handleSync = async function (plugin: FastSync, isLoadLastTime: bool
           let folderCount = 0;
           for (const path of trackedFolderPaths) {
             if (++folderCount % 100 === 0) await yieldToMain();
-            if (isFolderSyncPathExcluded(path, plugin)) continue;
+            if (isFolderSyncPathExcluded(path, plugin) || plugin.cloudAttachmentSafety?.protects(path)) continue;
             if (!localFolderPathsSet.has(path)) {
               missingFolders.push({ path: path, pathHash: hashContent(path) });
             }
@@ -1586,9 +1580,8 @@ export const handleRequestSend = async function (plugin: FastSync, syncMode: Syn
       }
     ));
 
-    // 云预览模式且未开启类型限制时跳过 FileSync
-    // Skip FileSync when cloud-preview is on without type restriction
-    if (!plugin.settings.cloudPreviewEnabled || plugin.settings.cloudPreviewTypeRestricted) {
+    // Keep the file channel active: large and unselected attachments still need local copies.
+    {
       jobs.push(sendSyncInBatches(
         plugin,
         "FileSync",

@@ -321,6 +321,8 @@ export const configIsPathExcluded = function (relativePath: string, plugin: Fast
     normalizedPath === `${pluginSelfDir}/main.js` ||
     normalizedPath === `${pluginSelfDir}/manifest.json` ||
     normalizedPath === `${pluginSelfDir}/styles.css` ||
+    normalizedPath === `${pluginSelfDir}/cloud-attachments.json` ||
+    normalizedPath === `${pluginSelfDir}/cloud-attachments.json.tmp` ||
     normalizedPath === `${pluginSelfDir}/data.json` ||
     normalizedPath === `${pluginSelfDir}/config-delete-conflicts.json` ||
     normalizedPath === `${pluginSelfDir}/config-delete-conflicts.json.tmp` ||

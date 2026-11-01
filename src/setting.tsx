@@ -15,6 +15,7 @@ import { RuleEditor } from "./views/rule-editor";
 import { $ } from "./i18n/lang";
 import FastSync from "./main";
 import { updateVaultName } from "./lib/settings/vault_name";
+import { CLOUD_MEDIA_EXTENSIONS, MAX_CLOUD_ONLY_MB, CloudMediaType } from "./lib/storage/cloud_attachment_policy";
 
 
 export interface PluginSettings {
@@ -50,6 +51,8 @@ export interface PluginSettings {
   cloudPreviewRemoteUrl: string
   /** 云端预览上传后是否自动删除本地文件 */
   cloudPreviewAutoDeleteLocal: boolean
+  cloudPreviewMaxSizeMb: number
+  cloudPreviewMediaTypes: CloudMediaType[]
   /** 是否启用动态附件目录拼接（将 Ob 默认附件路径拼接到请求 path 中） */
   cloudPreviewDynamicAttachment: boolean
   /** 是否启用离线删除同步（本地删除后同步到服务端） */
@@ -146,6 +149,8 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   cloudPreviewTypeRestricted: true,
   cloudPreviewRemoteUrl: "",
   cloudPreviewAutoDeleteLocal: false,
+  cloudPreviewMaxSizeMb: 10,
+  cloudPreviewMediaTypes: ["image", "audio"],
   cloudPreviewDynamicAttachment: false,
   offlineDeleteSyncEnabled: false,
   syncUpdateDelay: 0,
@@ -1829,15 +1834,45 @@ export class SettingTab extends PluginSettingTab {
     this.setDescWithBreaks(set.lastElementChild as HTMLElement, $("setting.cloud.desc"))
 
     if (this.plugin.settings.cloudPreviewEnabled) {
-      new Setting(set).setName($("setting.cloud.type_limit")).setClass("fns-setting-item-checkbox").addToggle((toggle) =>
-        toggle.setValue(this.plugin.settings.cloudPreviewTypeRestricted).onChange(async (value) => {
-          if (value != this.plugin.settings.cloudPreviewTypeRestricted) {
-            this.plugin.settings.cloudPreviewTypeRestricted = value
+      new Setting(set).setName($("setting.cloud.small_limit"))
+        .setDesc($("setting.cloud.small_limit_desc"))
+        .addText(text => {
+          text.setPlaceholder("10").setValue(String(this.plugin.settings.cloudPreviewMaxSizeMb))
+            .onChange(async value => {
+              const limit = Number(value)
+              if (!Number.isInteger(limit) || limit < 1 || limit > MAX_CLOUD_ONLY_MB) {
+                if (value) showSyncNotice($("setting.cloud.invalid_limit"))
+                return
+              }
+              this.plugin.settings.cloudPreviewMaxSizeMb = limit
+              await this.plugin.saveAndReloadServices()
+            })
+          text.inputEl.type = "number"
+          text.inputEl.min = "1"
+          text.inputEl.max = String(MAX_CLOUD_ONLY_MB)
+          text.inputEl.step = "1"
+        })
+
+      for (const type of Object.keys(CLOUD_MEDIA_EXTENSIONS) as CloudMediaType[]) {
+        new Setting(set).setName($("setting.cloud.media_" + type as "setting.cloud.media_image"))
+          .addToggle(toggle => toggle.setValue(this.plugin.settings.cloudPreviewMediaTypes.includes(type))
+            .onChange(async enabled => {
+              const selected = new Set(this.plugin.settings.cloudPreviewMediaTypes)
+              if (enabled) selected.add(type); else selected.delete(type)
+              this.plugin.settings.cloudPreviewMediaTypes = Array.from(selected)
+              await this.plugin.saveAndReloadServices()
+            }))
+      }
+
+      new Setting(set).setName($("setting.cloud.delete_after_upload")).setClass("fns-setting-item-checkbox").addToggle((toggle) =>
+        toggle.setValue(this.plugin.settings.cloudPreviewAutoDeleteLocal).onChange(async (value) => {
+          if (value != this.plugin.settings.cloudPreviewAutoDeleteLocal) {
+            this.plugin.settings.cloudPreviewAutoDeleteLocal = value
             await this.plugin.saveAndReloadServices()
           }
         }),
       )
-      this.setDescWithBreaks(set.lastElementChild as HTMLElement, $("setting.cloud.type_limit_desc"))
+      this.setDescWithBreaks(set.lastElementChild as HTMLElement, $("setting.cloud.delete_after_upload_desc"))
 
       new Setting(set).setName($("setting.cloud.remote_source")).addTextArea((text) =>
         text
@@ -1854,16 +1889,6 @@ export class SettingTab extends PluginSettingTab {
       const remoteUrlSetting = set.lastElementChild as HTMLElement
       remoteUrlSetting.addClass("fast-note-sync-remote-url-setting")
       this.setDescWithBreaks(remoteUrlSetting, $("setting.cloud.remote_source_desc"))
-
-      new Setting(set).setName($("setting.cloud.delete_after_upload")).setClass("fns-setting-item-checkbox").addToggle((toggle) =>
-        toggle.setValue(this.plugin.settings.cloudPreviewAutoDeleteLocal).onChange(async (value) => {
-          if (value != this.plugin.settings.cloudPreviewAutoDeleteLocal) {
-            this.plugin.settings.cloudPreviewAutoDeleteLocal = value
-            await this.plugin.saveAndReloadServices()
-          }
-        }),
-      )
-      this.setDescWithBreaks(set.lastElementChild as HTMLElement, $("setting.cloud.delete_after_upload_desc"))
 
       new Setting(set).setName($("setting.cloud.dynamic_attachment")).setClass("fns-setting-item-checkbox").addToggle((toggle) =>
         toggle.setValue(this.plugin.settings.cloudPreviewDynamicAttachment).onChange(async (value) => {
