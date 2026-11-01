@@ -48,13 +48,25 @@ async function fixture({ content = bytes('small image payload'), path: filePath 
     cloudPreviewMaxSizeMb: 10, cloudPreviewMediaTypes: ['image', 'audio'] };
   const plugin = {
     settings, manifest: { id: 'fast-note-sync' },
-    app: { vault: { configDir: '.obsidian', adapter: {
-      exists: async p => disk.has(p), read: async p => disk.get(p),
-      write: async (p, text) => { if (state.beforeWrite) await state.beforeWrite(p); if (state.failWrite) throw new Error('disk full'); disk.set(p, text); },
-      remove: async p => { disk.delete(p); },
-    }, getFileByPath: p => local.get(p)?.file ?? null,
-    readBinary: async f => { state.readCount++; return local.get(f.path).content.slice(0); } },
-    fileManager: { trashFile: async f => { if (state.failTrash) throw new Error('trash denied'); trashed.push(f.path); local.delete(f.path); } } },
+    app: {
+      vault: {
+        configDir: '.obsidian',
+        adapter: {
+          exists: async p => disk.has(p), read: async p => disk.get(p),
+          write: async (p, text) => { if (state.beforeWrite) await state.beforeWrite(p); if (state.failWrite) throw new Error('disk full'); disk.set(p, text); },
+          remove: async p => { disk.delete(p); },
+        },
+        getFileByPath: p => local.get(p)?.file ?? null,
+        readBinary: async f => { state.readCount++; return local.get(f.path).content.slice(0); },
+        createBinary: async (p, data) => {
+          const created = Object.assign(new TFile(), { path: p, stat: { size: data.byteLength, mtime: 1, ctime: 1 }, extension: p.split('.').pop() });
+          local.set(p, { file: created, content: data });
+          return created;
+        },
+      },
+      fileManager: { trashFile: async f => { if (state.failTrash) throw new Error('trash denied'); trashed.push(f.path); local.delete(f.path); } },
+      metadataCache: { resolvedLinks: { '笔记.md': { [filePath]: 1 } } },
+    },
     lockManager: { withLock: async (_, fn) => fn() },
     fileHashManager: { removeFileHash: p => hashes.delete(p), flush() {} },
     api: { getFileInfo: async () => state.info,
@@ -186,6 +198,26 @@ test('recreated local attachments leave cloud-only state and short links resolve
   await f.safety.localPresent(f.filePath); assert.equal(f.safety.protects(f.filePath), false);
 });
 
+test('an upload that no saved note references stays in the file list', async () => {
+  const f = await fixture(); f.plugin.app.metadataCache.resolvedLinks = {};
+  await f.stage(); assert.equal(await f.ack(), false);
+  assert.equal(f.local.has(f.filePath), true); assert.equal(f.safety.protects(f.filePath), false);
+});
+test('removing the last note reference downloads the cloud file back', async () => {
+  const f = await fixture(); await f.stage(); assert.equal(await f.ack(), true);
+  f.plugin.app.metadataCache.resolvedLinks = {};
+  await f.safety.reconcile();
+  assert.equal(f.local.has(f.filePath), true);
+  assert.equal(f.safety.protects(f.filePath), false);
+  assert.equal(new Uint8Array(f.local.get(f.filePath).content)[0], new Uint8Array(f.content)[0]);
+});
+test('adding a note reference later cleans an already uploaded local file', async () => {
+  const f = await fixture(); f.plugin.app.metadataCache.resolvedLinks = {};
+  await f.stage(); assert.equal(await f.ack(), false);
+  f.plugin.app.metadataCache.resolvedLinks = { '笔记.md': { [f.filePath]: 1 } };
+  await f.safety.reconcile();
+  assert.equal(f.local.has(f.filePath), false);
+});
 test('a timestamp-only update during verification still cleans identical bytes', async () => {
   const f = await fixture(); await f.stage();
   f.state.beforeRemote = () => { f.file.stat.mtime = 999; };

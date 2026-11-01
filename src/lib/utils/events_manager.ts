@@ -40,6 +40,9 @@ export class EventManager {
 
     // --- Workspace Events ---
     this.plugin.registerEvent(app.workspace.on("file-menu", this.watchFileMenu))
+    this.plugin.registerEvent(app.metadataCache.on("resolve", (file) => {
+      if (file instanceof TFile && file.extension === "md") void this.plugin.cloudAttachmentSafety?.reconcile()
+    }))
 
     // --- Window Events ---
     window.addEventListener("focus", this.onWindowFocus)
