@@ -125,6 +125,33 @@ test('a whitelist cannot expose the sync plugin connection settings', () => {
   assert.equal(helpers.configIsPathExcluded(self, f.plugin), true);
 });
 
+test('a whitelist cannot expose the running sync plugin program files', () => {
+  const f = fixture();
+  for (const name of ['main.js', 'manifest.json', 'styles.css']) {
+    const path = '.obsidian/plugins/fast-note-sync/' + name;
+    f.plugin.settings.syncExcludeWhitelist = JSON.stringify([{ pattern: path }]);
+    assert.equal(helpers.configIsPathExcluded(path, f.plugin), true);
+  }
+  assert.equal(helpers.configIsPathExcluded(target, fixture().plugin), false);
+});
+
+test('cloud configuration cannot overwrite, delete, retime or upload the running plugin', async () => {
+  const f = fixture();
+  for (const name of ['main.js', 'manifest.json', 'styles.css']) {
+    const path = '.obsidian/plugins/fast-note-sync/' + name;
+    f.data.set(path, { text: 'BRAT test release', mtime: 50 });
+    await config.receiveConfigSyncModify({ path, content: 'upstream old release', lastTime: 999 }, f.plugin);
+    await config.receiveConfigSyncDelete({ path, lastTime: 999 }, f.plugin);
+    await config.receiveConfigSyncMtime({ path, mtime: 999 }, f.plugin);
+    await config.receiveConfigUpload({ path }, f.plugin);
+    await config.configModify(path, f.plugin, false, 'BRAT test release', true);
+    await config.configDelete(path, f.plugin);
+    assert.equal(f.data.get(path).text, 'BRAT test release');
+    assert.equal(f.data.get(path).mtime, 50);
+  }
+  assert.equal(f.sent.length, 0);
+});
+
 test('ordinary attachments still enter the normal download path', async () => {
   const f = fixture();
   await files.receiveFileSyncUpdate({ path: '附件/中文 图片.png', pathHash: 'ordinary', size: 12 }, f.plugin);

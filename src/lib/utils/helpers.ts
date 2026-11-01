@@ -318,6 +318,9 @@ export const configIsPathExcluded = function (relativePath: string, plugin: Fast
   // Hard exclude the plugin's own database and cache files; do not sync them under any circumstances
   const pluginSelfDir = getPluginDir(plugin)
   if (
+    normalizedPath === `${pluginSelfDir}/main.js` ||
+    normalizedPath === `${pluginSelfDir}/manifest.json` ||
+    normalizedPath === `${pluginSelfDir}/styles.css` ||
     normalizedPath === `${pluginSelfDir}/data.json` ||
     normalizedPath === `${pluginSelfDir}/config-delete-conflicts.json` ||
     normalizedPath === `${pluginSelfDir}/config-delete-conflicts.json.tmp` ||
