@@ -276,6 +276,54 @@ test('a delayed modify callback for a now-absent file cannot erase cloud-only in
   await files.fileDelete(f.file, f.plugin, true); assert.equal(f.sent.length, 0);
 });
 const { HttpApiService } = load('src/lib/api/http_api_service');
+async function receiverFixture({ referenced = false } = {}) {
+  const f = await fixture();
+  f.local.clear();
+  f.plugin.app.metadataCache.resolvedLinks = {};
+  f.plugin.app.metadataCache.unresolvedLinks = referenced ? { '笔记.md': { [f.filePath]: 1 } } : {};
+  f.plugin.pendingFileDeleteAcks = new Set();
+  f.plugin.fileDownloadSessions = new Map();
+  f.plugin.concurrencyLimiter = { waitForSlot: async () => {}, releaseSlot() {} };
+  f.plugin.localStorageManager = { getMetadata: () => 0, setMetadata() {} };
+  f.plugin.totalFilesToDownload = 0;
+  const completed = [];
+  f.plugin.recordSyncCompleted = (...args) => completed.push(args);
+  const update = { path: f.filePath, pathHash: 'synthetic-path', contentHash: f.hash,
+    size: f.content.byteLength, mtime: 123, ctime: 123, lastTime: 124, pageIndex: 0 };
+  return { ...f, completed, update };
+}
+test('unreferenced remote images request a local download on desktop and mobile', async () => {
+  for (const isMobile of [false, true]) {
+    obsidian.Platform.isMobile = isMobile;
+    try {
+      const f = await receiverFixture();
+      await files.receiveFileSyncUpdate(f.update, f.plugin);
+      assert.equal(f.sent[0]?.[0], 'FileChunkDownload');
+      assert.equal(f.sent[0]?.[1].path, f.filePath);
+      assert.equal(f.plugin.totalFilesToDownload, 1);
+      assert.equal(f.completed.length, 0);
+    } finally { obsidian.Platform.isMobile = false; }
+  }
+});
+test('referenced remote images remain available through cloud preview without downloading', async () => {
+  const f = await receiverFixture({ referenced: true });
+  await files.receiveFileSyncUpdate(f.update, f.plugin);
+  assert.equal(f.sent.length, 0);
+  assert.equal(f.completed.length, 1);
+  assert.equal(f.local.size, 0);
+});
+test('references to another attachment do not suppress an unreferenced image download', async () => {
+  const f = await receiverFixture();
+  f.plugin.app.metadataCache.unresolvedLinks = { '笔记.md': { '另一张图片.png': 1 } };
+  await files.receiveFileSyncUpdate(f.update, f.plugin);
+  assert.equal(f.sent[0]?.[0], 'FileChunkDownload');
+});
+test('unavailable reference tracking conservatively downloads the remote image', async () => {
+  const f = await receiverFixture();
+  f.plugin.cloudAttachmentSafety = undefined;
+  await files.receiveFileSyncUpdate(f.update, f.plugin);
+  assert.equal(f.sent[0]?.[0], 'FileChunkDownload');
+});
 test('second-device preview resolves attachment-folder and note-relative paths', async () => {
   const f = await fixture(); const api = new HttpApiService(f.plugin);
   api.getFileInfo = async p => { if (p === f.filePath) return f.state.info; throw Error('not found'); };

@@ -716,8 +716,9 @@ export const receiveFileSyncUpdate = async function (data: ReceiveFileSyncUpdate
     return
   }
 
-  // 如果开启了云预览，且是初始化同步阶段，由于云预览可以按需加载，跳过所有附件下载
+  // Only saved note references allow cloud-only storage; loose attachments must sync locally.
   if (isCloudOnlyEligible(data.path, data.size, plugin.settings)
+      && plugin.cloudAttachmentSafety?.referencedBySavedNote(data.path)
       && !plugin.app.vault.getFileByPath(normalizePath(data.path))) {
     plugin.recordSyncCompleted('file', data.pageIndex);
     return;
