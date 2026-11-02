@@ -141,7 +141,7 @@ export class CloudAttachmentSafety {
     }
 
     /** A saved note link is the only handle left after the local file is removed. */
-    private referencedBySavedNote(path: string): boolean {
+    referencedBySavedNote(path: string): boolean {
         if (Object.values(this.noteLinks()).some(targets => (targets?.[path] ?? 0) > 0)) return true;
         // Deleting the file turns a resolved embed into an unresolved link. That link still names the picture.
         const name = path.split("/").pop() ?? path;
